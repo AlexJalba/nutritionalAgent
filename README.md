@@ -148,6 +148,169 @@ graph = build_graph(model="claude-opus-4-7")
 
 ---
 
+## Deployment on AWS
+
+### Option A — EC2 (CLI)
+
+The simplest deployment: run the CLI directly on an EC2 instance.
+
+**1. Launch an EC2 instance**
+- AMI: Amazon Linux 2023 or Ubuntu 22.04
+- Instance type: `t3.micro` (free tier eligible)
+- Security group: allow SSH (port 22) from your IP only
+
+**2. Connect and set up**
+```bash
+ssh -i your-key.pem ec2-user@<your-ec2-ip>
+
+# Amazon Linux 2023
+sudo dnf install -y python3.11 python3.11-pip git
+
+# Ubuntu
+# sudo apt install -y python3.11 python3.11-venv git
+
+git clone https://github.com/AlexJalba/nutritionalAgent.git
+cd nutritionalAgent
+
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+python main.py
+```
+
+---
+
+### Option B — EC2 + FastAPI (HTTP API)
+
+Expose the agent as an HTTP endpoint so it can be called from any client.
+
+**1. Add `api.py` to the project root:**
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from langchain_core.messages import HumanMessage
+from src.agent.graph import get_graph
+from src.agent.prompts import validate_input
+
+app = FastAPI()
+graph = get_graph()
+sessions: dict = {}
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str = "default"
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    is_valid, error = validate_input(req.message)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error)
+    state = sessions.get(req.session_id, {"messages": [], "user_profile": {}, "daily_log": {}})
+    state["messages"].append(HumanMessage(content=req.message))
+    result = graph.invoke(state)
+    sessions[req.session_id] = result
+    return {"response": result["messages"][-1].content}
+```
+
+**2. Add to `requirements.txt`:**
+```
+fastapi>=0.115.0
+uvicorn>=0.30.0
+```
+
+**3. Run on EC2:**
+```bash
+pip install fastapi uvicorn
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+**4. Open port 8000** in the EC2 security group inbound rules.
+
+**5. Test it:**
+```bash
+curl -X POST http://<ec2-ip>:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "How many calories in an apple?", "session_id": "user-1"}'
+```
+
+---
+
+### Keep it running with systemd
+
+```bash
+sudo tee /etc/systemd/system/nutrition-agent.service << 'EOF'
+[Unit]
+Description=Nutrition Advisor Agent
+After=network.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user/nutritionalAgent
+EnvironmentFile=/home/ec2-user/nutritionalAgent/.env
+ExecStart=/home/ec2-user/nutritionalAgent/.venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable nutrition-agent
+sudo systemctl start nutrition-agent
+
+# Check status
+sudo systemctl status nutrition-agent
+```
+
+---
+
+### Recommended production architecture
+
+```
+Internet
+    │
+    ▼
+Application Load Balancer  (HTTPS port 443)
+    │
+    ▼
+EC2 Auto Scaling Group  (t3.small, Amazon Linux 2023)
+    │  uvicorn api:app --port 8000
+    │
+    ▼
+AWS Secrets Manager  ←── ANTHROPIC_API_KEY stored securely
+```
+
+Store the API key in **AWS Secrets Manager** instead of `.env`:
+```bash
+aws secretsmanager create-secret \
+  --name nutrition-agent/anthropic-key \
+  --secret-string "sk-ant-..."
+```
+
+Fetch it at startup using `boto3`:
+```python
+import boto3, json
+
+def get_api_key():
+    client = boto3.client("secretsmanager", region_name="eu-west-1")
+    secret = client.get_secret_value(SecretId="nutrition-agent/anthropic-key")
+    return secret["SecretString"]
+```
+
+---
+
+### Cost estimate
+
+| Setup | Est. monthly cost |
+|---|---|
+| `t3.micro` (AWS free tier, first 12 months) | ~$0 |
+| `t3.small` (always on) | ~$15 |
+| `t3.small` + Application Load Balancer | ~$25 |
+
+---
+
 ## License
 
 MIT
