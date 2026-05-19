@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Build output
+dist/
+build/
+target/
+
+# Environment & secrets
+.env
+.env.*
+*.key
+*.pem
+secrets/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+
+# Claude / AI tools
+.claude/
+docs/brain/state.lock
+docs/brain/failures-this-session.md
+docs/brain/CURRENT.md
+docs/brain/reviews/
+docs/brain/specs/
+docs/brain/plans/
