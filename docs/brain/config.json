@@ -1,0 +1,9 @@
+{
+  "mode": "guided",
+  "gates": {
+    "after_brainstorm": true,
+    "after_plan": false,
+    "after_implement": false,
+    "after_audit": true
+  }
+}
